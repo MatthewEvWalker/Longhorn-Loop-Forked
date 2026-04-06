@@ -38,7 +38,7 @@ async function sendVerificationEmail(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: "Longhorn Loop <verify@longhornloop.com>",
+      from: "Longhorn Loop <onboarding@resend.dev>",
       to: [to],
       subject: "Your Longhorn Loop Verification Code",
       html: `
@@ -71,9 +71,10 @@ authRoutes.post("/send-code", async (c) => {
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  if (!isValidUTEmail(normalizedEmail)) {
-    return c.json({ error: "INVALID_UT_EMAIL" }, 400);
-  }
+  // TODO: Re-enable UT email check for production
+  // if (!isValidUTEmail(normalizedEmail)) {
+  //   return c.json({ error: "INVALID_UT_EMAIL" }, 400);
+  // }
 
   // Check resend cooldown
   const existing = await c.env.DB.prepare(

@@ -2,9 +2,10 @@ import PrimaryButton from '@/app/components/buttons/PrimaryButton';
 import TextInputField from '@/app/components/inputs/TextInputField';
 import FlowLayout from '@/app/components/layouts/FlowLayout';
 import { useOnboarding } from '@/app/context/OnboardingContext';
+import { API_BASE_URL } from '@/app/config/api';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { View, Text, Pressable } from 'react-native';
+import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import InlineAlert from '@/app/components/alerts/InlineAlert';
 
 export default function RegisterPage() {
@@ -15,6 +16,7 @@ export default function RegisterPage() {
   const [fieldLastName, setFieldLastName] = useState('');
   const [fieldEmail, setFieldEmail] = useState('');
   const [alertMessage, setAlertMessage] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fieldEmail);
 
@@ -38,14 +40,42 @@ export default function RegisterPage() {
       return;
     }
 
-    // TODO: call backend /auth/send-code here
-    // Store user info and navigate to verification
-    update({
-      firstName: fieldFirstName.trim(),
-      lastName: fieldLastName.trim(),
-      email: fieldEmail.trim().toLowerCase(),
-    });
-    router.push('/AccountVerification');
+    setLoading(true);
+    setAlertMessage('');
+
+    try {
+      const email = fieldEmail.trim().toLowerCase();
+      const res = await fetch(`${API_BASE_URL}/auth/send-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.error === 'INVALID_UT_EMAIL') {
+          setAlertMessage('Please use a valid @utexas.edu email address.');
+        } else if (data.error === 'RESEND_TOO_SOON') {
+          setAlertMessage('Verification code already sent. Please wait before requesting a new one.');
+        } else {
+          setAlertMessage('Something went wrong. Please try again.');
+        }
+        return;
+      }
+
+      // Store user info and navigate to verification
+      update({
+        firstName: fieldFirstName.trim(),
+        lastName: fieldLastName.trim(),
+        email,
+      });
+      router.push('/AccountVerification');
+    } catch (err) {
+      setAlertMessage('Network error. Please check your connection.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -104,9 +134,9 @@ export default function RegisterPage() {
 
       <View className='mt-[42px] mx-2'>
         <PrimaryButton
-          label='Sign Up'
-          isFilled={isEmailValid}
-          onPress={handleSubmit}
+          label={loading ? 'Sending...' : 'Sign Up'}
+          isFilled={isEmailValid && !loading}
+          onPress={loading ? undefined : handleSubmit}
         />
       </View>
 
