@@ -85,8 +85,7 @@ export default function TermsAndConditions() {
               : 'bg-transparent border border-gray-300'
           }`}
           onPress={allChecked ? () => {
-            // Replace so the user can't swipe back to onboarding
-            router.replace('/(tabs)/home');
+            router.push('/OnboardingComplete');
           } : undefined}
           activeOpacity={allChecked ? 0.8 : 1}
         >
