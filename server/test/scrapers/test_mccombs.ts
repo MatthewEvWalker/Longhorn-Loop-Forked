@@ -1,21 +1,21 @@
-import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { classifyAspectRatio, parseImageDimensions } from '../events/normalize';
+import { describe, expect, it } from 'vitest';
+import { classifyAspectRatio, parseImageDimensions } from '../../src/events/normalize';
 import {
-  buildLocationFull,
-  buildLocationShort,
-  cleanHostOrganization,
-  decodeHtmlEntities,
-  extractLocs,
-  extractMccombsEventId,
-  extractRsvpUrl,
-  parseEventFromHtml,
-  upgradeImageUrl,
-} from './mccombs';
+    buildLocationFull,
+    buildLocationShort,
+    cleanHostOrganization,
+    decodeHtmlEntities,
+    extractLocs,
+    extractMccombsEventId,
+    extractRsvpUrl,
+    parseEventFromHtml,
+    upgradeImageUrl,
+} from '../../src/scrapers/mccombs';
 
 function loadFixture(name: string): string {
-  return readFileSync(join(__dirname, '__fixtures__', 'mccombs', name), 'utf-8');
+  return readFileSync(join(__dirname, '..', '..', 'src', 'scrapers', '__fixtures__', 'mccombs', name), 'utf-8');
 }
 
 describe('parseEventFromHtml', () => {
