@@ -1,48 +1,30 @@
-// Shared interest categories and their tags. Used by:
-//   - Onboarding InterestSelection screen
-//   - Create Event Step 3
-//
-// A category's `id` should match the DiscoveryBucketId when they overlap
-// (music, arts, sports, etc.). Campus-Wide has no matching category here
-// since it's not an interest.
-//
-// The pure data (ids, labels, tags) is mirrored in server/src/lib/taxonomy.ts
-// so the server can use it without pulling in React or SVG deps.
+/**
+ * Server-side taxonomy data — bucket IDs, labels, and tags.
+ *
+ * This file is a copy of shared/taxonomy.ts, kept inside server/src/ so
+ * the server's TypeScript project (rootDir: "./src") can import it without
+ * crossing directory boundaries.
+ *
+ * KEEP IN SYNC with shared/taxonomy.ts.
+ * The vitest test server/test/taxonomy.test.ts enforces this — it imports
+ * from BOTH files and fails if the bucket lists diverge.
+ *
+ * Server imports: import { TAXONOMY_BUCKETS } from './lib/taxonomy'
+ */
 
-import ArtsIcon from '@/assets/images/arts_culture.svg';
-import BallIcon from '@/assets/images/ball.svg';
-import BusinessIcon from '@/assets/images/business.svg';
-import FoodIcon from '@/assets/images/food&drink.svg';
-import HealthIcon from '@/assets/images/health_wellness.svg';
-import HomeIcon from '@/assets/images/home_lifestyle.svg';
-import HandshakeIcon from '@/assets/images/ix_handshake.svg';
-import LearningIcon from '@/assets/images/learning&ed.svg';
-import MusicIcon from '@/assets/images/music.svg';
-import NightlifeIcon from '@/assets/images/nightlife.svg';
-import OutdoorsIcon from '@/assets/images/outdoors.svg';
-import PerformingIcon from '@/assets/images/performing_arts.svg';
-import PetsIcon from '@/assets/images/pets.svg';
-import ScienceIcon from '@/assets/images/science.svg';
-import ShoppingIcon from '@/assets/images/shopping_fashion.svg';
-import SpiritualityIcon from '@/assets/images/spirituality.svg';
-import TechIcon from '@/assets/images/technology.svg';
-import TravelIcon from '@/assets/images/travel.svg';
-import VideoGameIcon from '@/assets/images/Video_Game.svg';
-import React from 'react';
-import { SvgProps } from 'react-native-svg';
-
-export type InterestCategory = {
+export type TaxonomyBucket = {
+  /** Stable snake_case ID — used as a foreign key in event_tags.bucket_id */
   id: string;
+  /** Human-readable label */
   label: string;
-  icon: React.FC<SvgProps>;
+  /** Child tags belonging to this bucket */
   tags: string[];
 };
 
-export const INTEREST_CATEGORIES: InterestCategory[] = [
+export const TAXONOMY_BUCKETS: TaxonomyBucket[] = [
   {
     id: 'music',
     label: 'Music',
-    icon: MusicIcon,
     tags: [
       'Rock & Alternative',
       'Hip Hop & Rap',
@@ -60,7 +42,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'arts',
     label: 'Arts & Culture',
-    icon: ArtsIcon,
     tags: [
       'Art Exhibitions & Galleries',
       'Theater & Broadway',
@@ -78,7 +59,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'sports',
     label: 'Sports & Fitness',
-    icon: BallIcon,
     tags: [
       'Football & Soccer',
       'Basketball',
@@ -97,7 +77,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'food',
     label: 'Food & Drink',
-    icon: FoodIcon,
     tags: [
       'Wine Tasting',
       'Craft Beer & Breweries',
@@ -115,7 +94,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'tech',
     label: 'Technology & Innovation',
-    icon: TechIcon,
     tags: [
       'Startup & Entrepreneurship',
       'AI & Machine Learning',
@@ -133,7 +111,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'learning',
     label: 'Learning & Education',
-    icon: LearningIcon,
     tags: [
       'Workshops & Seminars',
       'Language Learning',
@@ -151,7 +128,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'outdoors',
     label: 'Outdoors & Nature',
-    icon: OutdoorsIcon,
     tags: [
       'Hiking & Trekking',
       'Camping',
@@ -167,7 +143,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'gaming',
     label: 'Gaming & Entertainment',
-    icon: VideoGameIcon,
     tags: [
       'Video Gaming',
       'Board Games & Tabletop',
@@ -184,7 +159,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'social',
     label: 'Social & Networking',
-    icon: HandshakeIcon,
     tags: [
       'Meetups & Mixers',
       'Speed Networking',
@@ -201,7 +175,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'health',
     label: 'Health & Wellness',
-    icon: HealthIcon,
     tags: [
       'Mental Health & Therapy',
       'Nutrition & Diet',
@@ -218,7 +191,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'shopping',
     label: 'Shopping & Fashion',
-    icon: ShoppingIcon,
     tags: [
       'Fashion Shows',
       'Vintage & Thrift',
@@ -235,7 +207,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'business',
     label: 'Business & Professional',
-    icon: BusinessIcon,
     tags: [
       'Career Fairs',
       'Case Competitions',
@@ -254,7 +225,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'performing',
     label: 'Performing Arts',
-    icon: PerformingIcon,
     tags: [
       'Stand-Up Comedy',
       'Improv & Sketch',
@@ -268,7 +238,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'travel',
     label: 'Travel & Adventure',
-    icon: TravelIcon,
     tags: [
       'Travel Meetups',
       'Adventure Travel',
@@ -285,7 +254,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'pets',
     label: 'Pets & Animals',
-    icon: PetsIcon,
     tags: [
       'Dog Meetups & Walks',
       'Cat Cafes & Events',
@@ -301,7 +269,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'home',
     label: 'Home & Lifestyle',
-    icon: HomeIcon,
     tags: [
       'Interior Design',
       'DIY & Home Improvement',
@@ -316,7 +283,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'nightlife',
     label: 'Nightlife & Parties',
-    icon: NightlifeIcon,
     tags: [
       'Clubs & Dancing',
       'Bar Hopping',
@@ -333,7 +299,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'science',
     label: 'Science & Academia',
-    icon: ScienceIcon,
     tags: [
       'Physics & Astronomy',
       'Biology & Life Sciences',
@@ -350,7 +315,6 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   {
     id: 'spirituality',
     label: 'Spirituality & Religion',
-    icon: SpiritualityIcon,
     tags: [
       'Meditation & Mindfulness',
       'Yoga & Spiritual Practice',
@@ -366,5 +330,8 @@ export const INTEREST_CATEGORIES: InterestCategory[] = [
   },
 ];
 
-// Flat list of every tag, in taxonomy order. Handy for search/autocomplete.
-export const ALL_INTEREST_TAGS: string[] = INTEREST_CATEGORIES.flatMap((c) => c.tags);
+/** Flat list of every tag in taxonomy order. Handy for classifier keyword lookups. */
+export const ALL_TAXONOMY_TAGS: string[] = TAXONOMY_BUCKETS.flatMap((b) => b.tags);
+
+/** Set of all valid bucket IDs — useful for fast membership checks. */
+export const BUCKET_ID_SET: ReadonlySet<string> = new Set(TAXONOMY_BUCKETS.map((b) => b.id));
