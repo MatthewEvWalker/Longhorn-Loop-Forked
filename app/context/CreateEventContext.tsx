@@ -9,26 +9,25 @@ export interface CreateEventPoster {
   role: string;
 }
 
+// IDs mirror InterestCategory ids from app/lib/interestCategories.ts.
+// Keep the two lists in sync as step 3 of the flow picks tags from the
+// category whose id equals the selected DiscoveryBucketId.
 export type DiscoveryBucketId =
-  | 'campus_wide'
   | 'music'
+  | 'performing'
   | 'arts'
   | 'sports'
   | 'food'
   | 'tech'
-  | 'learning'
+  | 'science'
+  | 'education'
   | 'outdoors'
   | 'gaming'
   | 'social'
   | 'health'
-  | 'shopping'
   | 'business'
-  | 'performing'
   | 'travel'
-  | 'pets'
-  | 'home'
   | 'nightlife'
-  | 'science'
   | 'spirituality';
 
 export const MAX_INTEREST_TAGS = 5;
@@ -58,6 +57,8 @@ export interface CreateEventData {
   locationFull: string;
   rsvpUrl: string;
   imageUrl: string | null;
+  imageName: string | null;
+  imageMimeType: string | null;
 }
 
 interface CreateEventContextType {
@@ -79,6 +80,8 @@ const DEFAULT_DATA: CreateEventData = {
   locationFull: '',
   rsvpUrl: '',
   imageUrl: null,
+  imageName: null,
+  imageMimeType: null,
 };
 
 const CreateEventContext = createContext<CreateEventContextType>({
