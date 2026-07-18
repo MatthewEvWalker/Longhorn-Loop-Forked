@@ -2,8 +2,12 @@
 //   - Onboarding InterestSelection screen
 //   - Create Event Step 3
 //
-// NOTE: A category's `id` should match the DiscoveryBucketId when they overlap
-// (music, arts, sports, etc.).
+// A category's `id` should match the DiscoveryBucketId when they overlap
+// (music, arts, sports, etc.). Campus-Wide has no matching category here
+// since it's not an interest.
+//
+// The pure data (ids, labels, tags) is mirrored in server/src/lib/taxonomy.ts
+// so the server can use it without pulling in React or SVG deps.
 
 import ArtsIcon from '@/assets/images/arts_culture.svg';
 import BallIcon from '@/assets/images/ball.svg';
