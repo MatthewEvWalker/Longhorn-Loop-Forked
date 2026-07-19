@@ -10,6 +10,7 @@
 
 const PROD_API = 'https://loop-db.longhorn-developers.workers.dev';
 const LOCAL_API = 'http://localhost:8787';
+// const LOCAL_API = 'http://192.168.4.25:8787';
 
 const override = process.env.EXPO_PUBLIC_API_BASE_URL;
 
