@@ -996,9 +996,7 @@ eventRoutes.get('/:id', async (c) => {
     .all();
 
   const isRsvped = userId
-    ? !!(await c.env.DB.prepare(
-        'SELECT 1 FROM event_rsvps WHERE user_id = ? AND event_id = ?',
-      )
+    ? !!(await c.env.DB.prepare('SELECT 1 FROM event_rsvps WHERE user_id = ? AND event_id = ?')
         .bind(userId, id)
         .first())
     : false;
@@ -1032,9 +1030,7 @@ eventRoutes.post('/:id/rsvp', async (c) => {
     .first();
   if (!eventExists) return c.json({ error: 'EVENT_NOT_FOUND' }, 404);
 
-  await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO event_rsvps (user_id, event_id) VALUES (?, ?)`,
-  )
+  await c.env.DB.prepare(`INSERT OR IGNORE INTO event_rsvps (user_id, event_id) VALUES (?, ?)`)
     .bind(userId, eventId)
     .run();
 
@@ -1054,9 +1050,7 @@ eventRoutes.delete('/:id/rsvp', async (c) => {
     return c.json({ error: 'INVALID_EVENT_ID' }, 400);
   }
 
-  await c.env.DB.prepare(
-    `DELETE FROM event_rsvps WHERE user_id = ? AND event_id = ?`,
-  )
+  await c.env.DB.prepare(`DELETE FROM event_rsvps WHERE user_id = ? AND event_id = ?`)
     .bind(userId, eventId)
     .run();
 
