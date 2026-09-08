@@ -8,7 +8,12 @@ import { useOnboarding } from '@/app/context/OnboardingContext';
 import { ApiError, api } from '@/app/lib/api';
 import { appendImageFile } from '@/app/lib/imageForm';
 import { searchPlace } from '@/app/lib/localSearch';
-import { events as eventsKeys, feed as feedKeys, user as userKeys } from '@/app/lib/queryKeys';
+import {
+  events as eventsKeys,
+  feed as feedKeys,
+  org as orgKeys,
+  user as userKeys,
+} from '@/app/lib/queryKeys';
 import type { ThemeColors } from '@/app/lib/themeColors';
 import { useThemeColors } from '@/app/lib/themeColors';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -50,6 +55,25 @@ async function buildCreateEventForm(data: CreateEventData): Promise<FormData> {
   const form = new FormData();
 
   form.append('title', data.title.trim());
+  // Who the wizard's first step said is posting (LOOP-281).
+  //
+  // This form never sent it. Step 1 asks the question, stores the answer in
+  // CreateEventContext, and the preview screen reads poster.name off it -- but
+  // the request went out with no poster at all, so the server fell back to the
+  // caller's own name for host_organization_name and left
+  // host_organization_id NULL. GET /orgs/:orgId/events filters on that column,
+  // so an event an admin posted as their org appeared under Posted on their
+  // personal profile and nowhere in the org console. The org side of the app
+  // was effectively broken for anything created in-app.
+  //
+  // Only the id goes over the wire. The name is resolved from the
+  // organizations row server-side: the client's copy is a display string from
+  // a cached /orgs/mine response and would go stale the moment an org renamed
+  // itself, and trusting it would let a caller label an event with any org
+  // name they liked.
+  if (data.poster?.kind === 'org') {
+    form.append('host_organization_id', String(data.poster.id));
+  }
   appendOptional(form, 'description', data.description);
   if (data.startDatetime) form.append('start_datetime', data.startDatetime);
   if (data.dateMode === 'range' && data.endDatetime) {
@@ -132,6 +156,7 @@ export default function OptionalExtras() {
       });
     },
     onSuccess: async () => {
+      const postedAsOrgId = data.poster?.kind === 'org' ? data.poster.id : null;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: eventsKeys.lists() }),
         queryClient.invalidateQueries({ queryKey: feedKeys.all }),
@@ -142,6 +167,19 @@ export default function OptionalExtras() {
         // that does not have it. myEventsAll is the prefix, so every
         // tab/search/filter combination in the cache goes at once.
         queryClient.invalidateQueries({ queryKey: userKeys.myEventsAll() }),
+        // Same argument for the org console when the event was posted as an
+        // org (LOOP-281): its Events tab, its public profile grid and its
+        // analytics all cache per search/filter/sort combination, so each goes
+        // by prefix. Without this the console only picks the event up on the
+        // next cold fetch, which reads as the event having not been created.
+        ...(postedAsOrgId
+          ? [
+              queryClient.invalidateQueries({ queryKey: orgKeys.eventsAll(postedAsOrgId) }),
+              queryClient.invalidateQueries({ queryKey: orgKeys.publicEventsAll(postedAsOrgId) }),
+              queryClient.invalidateQueries({ queryKey: orgKeys.analyticsAll(postedAsOrgId) }),
+              queryClient.invalidateQueries({ queryKey: orgKeys.mine() }),
+            ]
+          : []),
       ]);
       reset();
       router.replace('/(tabs)/home?justPostedEvent=1');
@@ -263,9 +301,7 @@ export default function OptionalExtras() {
                   accessibilityRole="button"
                   accessibilityLabel="Remove flyer image"
                   hitSlop={10}
-                  onPress={() =>
-                    update({ imageUrl: null, imageName: null, imageMimeType: null })
-                  }
+                  onPress={() => update({ imageUrl: null, imageName: null, imageMimeType: null })}
                   onPressIn={() => setRemovePressed(true)}
                   onPressOut={() => setRemovePressed(false)}
                   style={[
