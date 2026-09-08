@@ -661,6 +661,79 @@ async function resolveImageFields(
   return empty;
 }
 
+/**
+ * Resolve the org an event is being posted as (LOOP-281).
+ *
+ * The create wizard's first step lets an admin or editor post as one of their
+ * orgs, and the row has always had a `host_organization_id` column for it --
+ * GET /orgs/:orgId/events filters on nothing else. Until this function the
+ * INSERT simply never populated it, so an org-posted event went in with a NULL
+ * org and the console that exists to manage it could not see it. Same shape as
+ * LOOP-259 (event_benefits) and LOOP-261 (organizations.bio): a column that
+ * everything downstream reads and the create path never wrote.
+ *
+ * Membership is re-checked here rather than trusted from the client. /orgs/mine
+ * is what populates the picker, but a request is a request: without this check
+ * any authenticated user could attribute an event to any org by id, which puts
+ * a post on a real org's public profile.
+ *
+ * Both roles may post. `editor` exists to let someone publish events without
+ * being handed the ability to change membership, so restricting this to `admin`
+ * would empty the role of its purpose.
+ *
+ * Returns the org's id AND its canonical name: `host_organization_name` is
+ * denormalized onto the event for the feed cards, and reading it from the
+ * organizations row keeps it from being whatever display string the caller's
+ * cached /orgs/mine response happened to hold.
+ */
+async function resolveHostOrganization(
+  db: D1Database,
+  body: CreateEventBody,
+  userId: number,
+  errors: ValidationErrors,
+): Promise<{ id: number; name: string } | null> {
+  // Presence is checked before parsing, and NOT with readStringField /
+  // readNumberField: both fold "absent" and "unparseable" into null, and those
+  // have to differ here. Absent means the user chose to post personally, which
+  // is valid; unparseable means a request naming an org we can't resolve,
+  // which must fail rather than quietly posting under the caller's own name
+  // and reproducing the bug this function exists to fix.
+  //
+  // Both shapes arrive in practice: the create wizard posts multipart, where
+  // every field is text, while the route also accepts JSON, where the id is a
+  // number.
+  const raw =
+    body.host_organization_id ?? body.hostOrganizationId ?? body.org_id ?? body.orgId ?? null;
+  if (raw === null || (typeof raw === 'string' && raw.trim().length === 0)) return null;
+
+  const orgId = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isInteger(orgId) || orgId <= 0) {
+    errors.host_organization_id = 'Must be a valid organization id';
+    return null;
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT o.id AS id, o.name AS name
+         FROM org_members m
+         JOIN organizations o ON o.id = m.org_id
+        WHERE m.org_id = ? AND m.user_id = ?`,
+    )
+    .bind(orgId, userId)
+    .first<{ id: number; name: string | null }>();
+
+  // Deliberately the same message for "no such org" and "not your org": the
+  // picker only ever offers orgs the caller belongs to, so either answer means
+  // a request the app would not have made, and distinguishing them turns this
+  // endpoint into a membership oracle.
+  if (!row) {
+    errors.host_organization_id = 'You are not a member of that organization';
+    return null;
+  }
+
+  return { id: row.id, name: (row.name ?? '').trim() };
+}
+
 function getHostName(body: CreateEventBody, user: AuthDbUser): string {
   const poster = body.poster;
   if (isRecord(poster)) {
@@ -843,6 +916,7 @@ eventRoutes.post('/create', async (c) => {
   const longitude = readNumberField(body, ['longitude', 'lng', 'lon']);
   const categories = normalizeCategories(body, errors);
   const benefits = normalizeBenefits(body, errors);
+  const hostOrg = await resolveHostOrganization(c.env.DB, body, user.id, errors);
   const imageFields =
     Object.keys(errors).length === 0
       ? await resolveImageFields(c.env, user.id, body, uploadedImage, errors)
@@ -860,14 +934,16 @@ eventRoutes.post('/create', async (c) => {
   }
 
   const sourceEventId = `user-${user.id}-${crypto.randomUUID()}`;
-  const hostName = getHostName(body, user);
+  // Posting as an org names the org, not the person at the keyboard -- the
+  // event belongs to the org on every surface that shows a host.
+  const hostName = hostOrg?.name || getHostName(body, user);
   const expiresAt = computeExpiresAt(endDatetime, startDatetime);
 
   const result = await c.env.DB.prepare(
     `INSERT INTO events (
        source, source_event_id, title, description,
        start_datetime, end_datetime, venue_type, location_short, location_full,
-       latitude, longitude, host_organization_name,
+       latitude, longitude, host_organization_id, host_organization_name,
        event_url, rsvp_url,
        image_url, image_width, image_height,
        image_aspect_ratio, image_mime_type, image_alt_text,
@@ -876,7 +952,7 @@ eventRoutes.post('/create', async (c) => {
      ) VALUES (
        ?, ?, ?, ?,
        ?, ?, ?, ?, ?,
-       ?, ?, ?,
+       ?, ?, ?, ?,
        ?, ?,
        ?, ?, ?,
        ?, ?, ?,
@@ -896,6 +972,7 @@ eventRoutes.post('/create', async (c) => {
       locationFull,
       latitude,
       longitude,
+      hostOrg?.id ?? null,
       hostName,
       eventUrl,
       rsvpUrl,

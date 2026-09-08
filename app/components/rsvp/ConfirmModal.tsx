@@ -36,6 +36,21 @@ interface ConfirmModalProps {
   onPrimary: () => void;
   onSecondary: () => void;
   primaryDestructive?: boolean;
+  /** Greys out the primary button while its action is in flight. */
+  primaryDisabled?: boolean;
+  /**
+   * Fires once the dialog has finished leaving the screen.
+   *
+   * Anything that presents its own native view controller — the platform
+   * browser behind an external RSVP link, a share sheet, a picker — has to
+   * wait for this rather than firing from onPrimary. UIKit refuses to present
+   * onto a controller that is still presenting, which is how LOOP-278 froze
+   * the app on iPhone and crashed it on iPad. See app/lib/externalLink.ts.
+   *
+   * React Native only calls Modal's onDismiss on iOS, which is also the only
+   * platform that needs it; callers must not treat it as guaranteed.
+   */
+  onDismissed?: () => void;
 }
 
 /**
@@ -60,6 +75,8 @@ export default function ConfirmModal({
   onPrimary,
   onSecondary,
   primaryDestructive = false,
+  primaryDisabled = false,
+  onDismissed,
 }: ConfirmModalProps) {
   const colors = useThemeColors();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -92,7 +109,13 @@ export default function ConfirmModal({
   const primaryPressedBg = primaryDestructive ? DESTRUCTIVE_PRESSED : BRAND_PRESSED;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onSecondary}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onSecondary}
+      onDismiss={onDismissed}
+    >
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.title}>{title}</Text>
@@ -121,9 +144,12 @@ export default function ConfirmModal({
             onPressIn={() => setPressed('primary')}
             onPressOut={() => setPressed(null)}
             accessibilityRole="button"
+            accessibilityState={{ disabled: primaryDisabled, busy: primaryDisabled }}
+            disabled={primaryDisabled}
             style={[
               styles.primaryButton,
               { backgroundColor: pressed === 'primary' ? primaryPressedBg : primaryBg },
+              primaryDisabled ? { opacity: 0.6 } : null,
             ]}
           >
             <Text style={styles.primaryText}>{primaryLabel}</Text>
