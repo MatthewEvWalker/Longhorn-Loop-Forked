@@ -70,6 +70,11 @@ class FakeD1Database {
     private readonly users: UserRow[] = [
       { id: 1, email: USER_EMAIL, first_name: 'Bevo', last_name: 'Student' },
     ],
+    /**
+     * Orgs the caller belongs to, for the host_organization_id path (LOOP-281).
+     * Empty by default so every test predating it behaves as before.
+     */
+    private readonly memberships: { orgId: number; userId: number; orgName: string }[] = [],
   ) {}
 
   prepare(sql: string): FakeD1Statement {
@@ -84,6 +89,15 @@ class FakeD1Database {
     if (sql.includes('FROM events e') && sql.includes('WHERE e.id = ?')) {
       const event = this.events.find((row) => row.id === params[0]);
       return event ? { ...event, org_profile_picture: null } : null;
+    }
+
+    // resolveHostOrganization: the caller's membership in the org they claim
+    // to be posting as, plus that org's canonical name (LOOP-281).
+    if (sql.includes('FROM org_members m') && sql.includes('JOIN organizations o')) {
+      const row = this.memberships.find(
+        (member) => member.orgId === params[0] && member.userId === params[1],
+      );
+      return row ? { id: row.orgId, name: row.orgName } : null;
     }
 
     throw new Error(`Unexpected first() SQL: ${sql}`);
@@ -122,23 +136,26 @@ class FakeD1Database {
         location_full: params[8] as string | null,
         latitude: params[9] as number | null,
         longitude: params[10] as number | null,
-        host_organization_id: null,
-        host_organization_name: params[11] as string,
-        event_url: params[12] as string | null,
-        rsvp_url: params[13] as string | null,
-        image_url: params[14] as string | null,
-        image_width: params[15] as number | null,
-        image_height: params[16] as number | null,
-        image_aspect_ratio: params[17] as string,
-        image_mime_type: params[18] as string | null,
-        image_alt_text: params[19] as string | null,
-        theme: params[20] as string | null,
+        // params[11] was a hardcoded null until LOOP-281 — the INSERT did not
+        // name host_organization_id at all, which is precisely why an event an
+        // admin posted as their org never reached the org console.
+        host_organization_id: params[11] as number | null,
+        host_organization_name: params[12] as string,
+        event_url: params[13] as string | null,
+        rsvp_url: params[14] as string | null,
+        image_url: params[15] as string | null,
+        image_width: params[16] as number | null,
+        image_height: params[17] as number | null,
+        image_aspect_ratio: params[18] as string,
+        image_mime_type: params[19] as string | null,
+        image_alt_text: params[20] as string | null,
+        theme: params[21] as string | null,
         visibility: 'Public',
         rsvp_total: 0,
         status: 'active',
-        expires_at: params[21] as string,
+        expires_at: params[22] as string,
         is_featured: 0,
-        created_by_user_id: params[22] as number,
+        created_by_user_id: params[23] as number,
         is_archived: 0,
         archived_at: null,
       };
@@ -383,6 +400,115 @@ describe('POST /events/create', () => {
       image_aspect_ratio: 'square',
       image_mime_type: 'image/png',
       image_alt_text: 'Flyer',
+    });
+  });
+
+  // LOOP-281. The wizard's first step lets an admin or editor post as one of
+  // their orgs, but the request carried no poster and the INSERT never named
+  // host_organization_id — so the row went in with a NULL org and
+  // GET /orgs/:orgId/events, which filters on exactly that column, could not
+  // see it. The event showed under Posted on the poster's own profile, which
+  // is what made it look like a read bug rather than a write one.
+  describe('posting as an organization (LOOP-281)', () => {
+    const ORG = 42;
+
+    const withOrg = () =>
+      new FakeD1Database(
+        [{ id: 1, email: USER_EMAIL, first_name: 'Bevo', last_name: 'Student' }],
+        [{ orgId: ORG, userId: 1, orgName: 'Longhorn Devs' }],
+      );
+
+    const baseBody = {
+      title: 'Gong Cha Coffee Chat',
+      start_datetime: '2026-09-20T18:00:00-05:00',
+      venue_type: 'in_person',
+      location: 'GDC 2.216',
+    };
+
+    it('writes host_organization_id so the org console can find the event', async () => {
+      const db = withOrg();
+      const res = await postCreate(
+        makeEnv(db),
+        { ...baseBody, host_organization_id: ORG },
+        await signJwt(USER_EMAIL),
+      );
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { event: EventRow };
+      expect(json.event.host_organization_id).toBe(ORG);
+      // Still attributed to the person who posted it: the org association is
+      // added, it does not move the event off their profile.
+      expect(json.event.created_by_user_id).toBe(1);
+    });
+
+    it('takes the host name from the organizations row, not the request', async () => {
+      // The client's copy of the name comes from a cached /orgs/mine response
+      // and would go stale on a rename; trusting it would also let a caller
+      // label an event with any org name they liked.
+      const db = withOrg();
+      const res = await postCreate(
+        makeEnv(db),
+        { ...baseBody, host_organization_id: ORG, poster: { name: 'Not This Org' } },
+        await signJwt(USER_EMAIL),
+      );
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { event: EventRow };
+      expect(json.event.host_organization_name).toBe('Longhorn Devs');
+    });
+
+    it('accepts the id as a string, which is what multipart sends', async () => {
+      // The create wizard posts FormData, so every field arrives as text.
+      const db = withOrg();
+      const res = await postCreate(
+        makeEnv(db),
+        { ...baseBody, host_organization_id: String(ORG) },
+        await signJwt(USER_EMAIL),
+      );
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { event: EventRow };
+      expect(json.event.host_organization_id).toBe(ORG);
+    });
+
+    it('refuses an org the caller does not belong to', async () => {
+      // Otherwise any authenticated user could put a post on any org's public
+      // profile just by naming its id.
+      const db = withOrg();
+      const res = await postCreate(
+        makeEnv(db),
+        { ...baseBody, host_organization_id: 999 },
+        await signJwt(USER_EMAIL),
+      );
+
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error: string; fields: Record<string, string> };
+      expect(json.error).toBe('VALIDATION_ERROR');
+      expect(json.fields.host_organization_id).toBeTruthy();
+      expect(db.events).toHaveLength(0);
+    });
+
+    it('refuses an id that is not a positive integer', async () => {
+      const db = withOrg();
+      for (const bad of ['abc', '0', '-4', '1.5']) {
+        const res = await postCreate(
+          makeEnv(db),
+          { ...baseBody, host_organization_id: bad },
+          await signJwt(USER_EMAIL),
+        );
+        expect(res.status).toBe(400);
+      }
+      expect(db.events).toHaveLength(0);
+    });
+
+    it('leaves the org null and keeps the personal host name when posting as a person', async () => {
+      const db = withOrg();
+      const res = await postCreate(makeEnv(db), baseBody, await signJwt(USER_EMAIL));
+
+      expect(res.status).toBe(201);
+      const json = (await res.json()) as { event: EventRow };
+      expect(json.event.host_organization_id).toBeNull();
+      expect(json.event.host_organization_name).toBe('Bevo Student');
     });
   });
 });

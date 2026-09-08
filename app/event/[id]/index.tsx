@@ -18,6 +18,7 @@ import { AvatarDisplay, hasAvatar } from '@/app/components/profile/AvatarDisplay
 import RsvpSuccessToast from '@/app/components/rsvp/RsvpSuccessToast';
 import { useOnboarding } from '@/app/context/OnboardingContext';
 import { api, ApiError } from '@/app/lib/api';
+import { toExternalHttpUrl, useExternalLinkHandoff } from '@/app/lib/externalLink';
 import { events as eventsKeys, saved as savedKeys } from '@/app/lib/queryKeys';
 import { addRsvp, removeRsvp } from '@/app/lib/rsvpStore';
 import { shareEvent } from '@/app/lib/shareEvent';
@@ -28,8 +29,7 @@ import type { AvatarConfig } from '@/shared/avatar';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -292,8 +292,14 @@ export default function EventDetailScreen() {
   const [showDidYouRsvpModal, setShowDidYouRsvpModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showToast, setShowToast] = useState(false);
-  // Transient pill for the share fallbacks. Native share sheets report their
-  // own result, so this only ever fires on web (clipboard copy or failure).
+  // A write is in flight. The RSVP button used to give no sign of this at all,
+  // which on a slow connection was indistinguishable from the tap having been
+  // ignored -- half of what "the app freezes when you try to RSVP" (LOOP-278)
+  // described. It also gates re-entry, so a second tap can't double-post.
+  const [rsvpPending, setRsvpPending] = useState(false);
+  // Transient pill, shared by the share fallbacks and the RSVP error paths.
+  // Native share sheets report their own result, so the share side only ever
+  // fires on web (clipboard copy or failure).
   const [shareNotice, setShareNotice] = useState<string | null>(null);
 
   // Fetch the event.
@@ -391,19 +397,44 @@ export default function EventDetailScreen() {
       : 'Something went wrong loading this event.'
     : null;
 
+  // The RSVP link as something we can actually hand a browser, or null.
+  //
+  // `rsvp_url` is validated on POST /events/create but NOT in
+  // server/src/events/ingest.ts, so a scraped row can hold a scheme-less host,
+  // a non-http scheme, or a scrap of prose a link regex mistook for a URL.
+  // Deciding here means every branch below works from one answer instead of
+  // testing truthiness and discovering the problem at presentation time, which
+  // is how LOOP-278 crashed.
+  const externalRsvpUrl = useMemo(() => toExternalHttpUrl(event?.rsvp_url), [event?.rsvp_url]);
+
+  const externalLink = useExternalLinkHandoff({
+    // Asked when they come back from the browser, never while it is opening --
+    // this is another modal, and stacking one onto a presentation in flight is
+    // the failure LOOP-278 was. The hook owns that timing.
+    onReturn: () => setShowDidYouRsvpModal(true),
+    onFailure: () => setShareNotice('Couldn’t open the RSVP link'),
+  });
+
   // Top-level entry point for the RSVP button. Branches on current state
-  // and whether the event has a dedicated rsvp_url.
+  // and whether the event has a usable rsvp_url.
   const handleRsvpPress = () => {
-    if (!event) return;
+    if (!event || rsvpPending) return;
     if (isRsvped) {
       setShowCancelModal(true);
       return;
     }
-    if (event.rsvp_url) {
+    if (externalRsvpUrl) {
       setShowOpenLinkModal(true);
       return;
     }
-    confirmRsvp();
+    // A link is on the row but isn't a web address. Say so rather than
+    // recording a local RSVP: on an externally ticketed event that would tell
+    // the user they are going when they have not bought a ticket.
+    if (event.rsvp_url) {
+      setShareNotice('This event’s RSVP link isn’t a valid web address');
+      return;
+    }
+    void confirmRsvp();
   };
 
   // The cached detail row is what re-seeds isRsvped on the next mount, so it has
@@ -415,38 +446,70 @@ export default function EventDetailScreen() {
     );
   };
 
+  // Both writes below are wrapped. addRsvp/removeRsvp go through api.ts, which
+  // throws ApiError on a non-2xx and on an unreachable server (status 0) --
+  // and these were called from a modal's onPress with no catch, so a flaky
+  // connection produced an unhandled rejection and a button that silently
+  // stayed wrong. Failing loudly and leaving the state alone is the point.
   const confirmRsvp = async () => {
-    if (!event) return;
-    await addRsvp(event.id, token);
-    setIsRsvped(true);
-    setShowToast(true);
-    // isRsvped is local state seeded from the event query, and leaving the screen
-    // unmounts it. staleTime is 30s (app/_layout.tsx), so coming back inside that
-    // window replayed a cached row still saying is_rsvped: false and the button
-    // reverted to "RSVP" — the bug bash's "IM GOING doesn't stay". Writing through
-    // to the cache fixes it without a second round trip; the server already
-    // computes is_rsvped correctly on GET /events/:id.
-    patchCachedRsvpState(true);
-    // The caller has just joined the list they're looking at.
-    queryClient.invalidateQueries({ queryKey: eventsKeys.attendees(String(id)) });
+    if (!event || rsvpPending) return;
+    setRsvpPending(true);
+    try {
+      await addRsvp(event.id, token);
+      setIsRsvped(true);
+      setShowToast(true);
+      // isRsvped is local state seeded from the event query, and leaving the screen
+      // unmounts it. staleTime is 30s (app/_layout.tsx), so coming back inside that
+      // window replayed a cached row still saying is_rsvped: false and the button
+      // reverted to "RSVP" — the bug bash's "IM GOING doesn't stay". Writing through
+      // to the cache fixes it without a second round trip; the server already
+      // computes is_rsvped correctly on GET /events/:id.
+      patchCachedRsvpState(true);
+      // The caller has just joined the list they're looking at.
+      queryClient.invalidateQueries({ queryKey: eventsKeys.attendees(String(id)) });
+    } catch {
+      setShareNotice('Couldn’t save your RSVP. Try again.');
+    } finally {
+      setRsvpPending(false);
+    }
   };
 
   const confirmCancel = async () => {
-    if (!event) return;
-    await removeRsvp(event.id, token);
-    setIsRsvped(false);
+    if (!event || rsvpPending) return;
+    setRsvpPending(true);
     setShowCancelModal(false);
-    patchCachedRsvpState(false);
-    queryClient.invalidateQueries({ queryKey: eventsKeys.attendees(String(id)) });
+    try {
+      await removeRsvp(event.id, token);
+      setIsRsvped(false);
+      patchCachedRsvpState(false);
+      queryClient.invalidateQueries({ queryKey: eventsKeys.attendees(String(id)) });
+    } catch {
+      setShareNotice('Couldn’t cancel your RSVP. Try again.');
+    } finally {
+      setRsvpPending(false);
+    }
   };
 
-  const openExternalRsvp = async () => {
-    if (!event?.rsvp_url) return;
+  // "Yes, Continue" on the external-link dialog.
+  //
+  // This ONLY closes the dialog and queues the URL. The browser is presented
+  // from the dialog's onDismissed below, because presenting it here -- in the
+  // same tick as setShowOpenLinkModal(false), while the modal is still a live
+  // UIViewController -- is what froze the app on iPhone and crashed it on
+  // iPad. app/lib/externalLink.ts has the full account.
+  const openExternalRsvp = () => {
     setShowOpenLinkModal(false);
-    await WebBrowser.openBrowserAsync(event.rsvp_url);
-    // After the browser closes, ask whether they actually RSVPed.
-    setShowDidYouRsvpModal(true);
+    if (!externalLink.request(externalRsvpUrl)) {
+      setShareNotice('This event’s RSVP link isn’t a valid web address');
+    }
   };
+
+  // The dialog has left the screen; safe to present the browser now. A no-op
+  // if nothing was queued, so "Cancel" and a backdrop tap cost nothing.
+  const { flush: flushExternalLink } = externalLink;
+  const handleOpenLinkDismissed = useCallback(() => {
+    flushExternalLink();
+  }, [flushExternalLink]);
 
   if (loading) {
     return (
@@ -475,7 +538,10 @@ export default function EventDetailScreen() {
     );
   }
 
-  const hasRsvpLink = !!event.rsvp_url;
+  // Only advertise the external-link affordance when the link is one we can
+  // actually open -- an icon promising a hand-off that cannot happen is worse
+  // than no icon.
+  const hasRsvpLink = !!externalRsvpUrl;
   // Chips are our own benefits + classifier-assigned taxonomy tags — not the
   // raw scraped categories (which surfaced generic labels like "Social").
   const chips = [...(event.benefits ?? []), ...(event.tags ?? [])];
@@ -653,10 +719,28 @@ export default function EventDetailScreen() {
 
           <Pressable
             onPress={handleRsvpPress}
-            style={[styles.rsvpButton, { backgroundColor: isRsvped ? colors.info : colors.brand }]}
+            disabled={rsvpPending}
+            accessibilityRole="button"
+            accessibilityState={{ busy: rsvpPending, disabled: rsvpPending }}
+            style={[
+              styles.rsvpButton,
+              { backgroundColor: isRsvped ? colors.info : colors.brand },
+              rsvpPending ? { opacity: 0.75 } : null,
+            ]}
           >
             <Text style={styles.rsvpButtonText}>{isRsvped ? "I'm Going" : 'RSVP'}</Text>
-            {isRsvped ? (
+            {/*
+              A spinner while the write is in flight. Without it the button held
+              its resting state through the whole round trip, so a slow network
+              looked exactly like a dead button -- the other half of LOOP-278's
+              "app freezes when you try to RSVP".
+              theme-exempt: sits on the filled button, white in both themes.
+            */}
+            {rsvpPending ? (
+              <View style={{ marginLeft: 8 }}>
+                <ActivityIndicator size="small" color="#fff" />
+              </View>
+            ) : isRsvped ? (
               // theme-exempt: tick sits on the filled "Going" button, white in both themes
               <Text style={{ color: '#fff', fontSize: 16, marginLeft: 6 }}>✓</Text>
             ) : hasRsvpLink ? (
@@ -678,6 +762,7 @@ export default function EventDetailScreen() {
         secondaryLabel="Cancel"
         onPrimary={openExternalRsvp}
         onSecondary={() => setShowOpenLinkModal(false)}
+        onDismissed={handleOpenLinkDismissed}
       />
 
       {/* After returning from the browser: did you actually RSVP? */}
@@ -688,9 +773,10 @@ export default function EventDetailScreen() {
         emphasis="Were you able to RSVP through the external link?"
         primaryLabel="Yes"
         secondaryLabel="No"
+        primaryDisabled={rsvpPending}
         onPrimary={() => {
           setShowDidYouRsvpModal(false);
-          confirmRsvp();
+          void confirmRsvp();
         }}
         onSecondary={() => setShowDidYouRsvpModal(false)}
       />
@@ -704,7 +790,8 @@ export default function EventDetailScreen() {
         primaryLabel="Yes, cancel RSVP"
         secondaryLabel="Keep my RSVP"
         primaryDestructive
-        onPrimary={confirmCancel}
+        primaryDisabled={rsvpPending}
+        onPrimary={() => void confirmCancel()}
         onSecondary={() => setShowCancelModal(false)}
       />
 
