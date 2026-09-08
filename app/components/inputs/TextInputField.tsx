@@ -22,7 +22,10 @@ export default function TextInputField({
   const colors = useThemeColors();
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
-  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // ReturnType<typeof setTimeout>, not NodeJS.Timeout: RN's types no longer
+  // pull in Node's globals (Expo SDK 57), and the handle here is whatever the
+  // RN runtime's setTimeout returns — a number on Hermes — not a Node Timeout.
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // A blur schedules a 100ms timer so handleClear() can still fire. If the
   // field unmounts inside that window the timer is still pending and will call

@@ -166,7 +166,11 @@ function ActionRow({
           style={{ marginLeft: inkNudge(iconSize, inkLeftRatio) }}
         />
       </View>
-      <Text style={destructive ? { ...styles.actionLabel, color: colors.destructive } : styles.actionLabel}>
+      <Text
+        style={
+          destructive ? { ...styles.actionLabel, color: colors.destructive } : styles.actionLabel
+        }
+      >
         {label}
       </Text>
     </Pressable>
@@ -407,7 +411,10 @@ export default function ManageEventSheet({
 const makeStyles = (c: ThemeColors) =>
   StyleSheet.create({
     backdrop: {
-      ...StyleSheet.absoluteFillObject,
+      // absoluteFill: RN 0.83 (SDK 57) deleted absoluteFillObject at runtime,
+      // so spreading it here contributed nothing and the backdrop was
+      // unpositioned.
+      ...StyleSheet.absoluteFill,
       backgroundColor: 'rgba(0,0,0,0.4)', // theme-exempt: scrim over both themes
     },
     sheet: {

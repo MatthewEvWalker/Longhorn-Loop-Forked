@@ -427,6 +427,14 @@ export default function ExploreScreen() {
           selectedEventId={selectedEventId}
           onPinPress={handlePinPress}
           onMapPress={() => setSelectedEventId(null)}
+          // Reading a ref in render, deliberately. `initialRegion` is an
+          // uncontrolled prop the map consults once on mount, and the whole
+          // reason the last region lives in a ref is that panning the map must
+          // NOT re-render this screen. Promoting it to state would re-render on
+          // every frame of a drag; that is the bug this shape avoids, so the
+          // rule's advice does not apply here. The rule fires at the `body()`
+          // call site below rather than on this line, so the disable lives
+          // there — this is the reason for it.
           initialRegion={lastRegion.current ?? undefined}
           onRegionSettled={handleRegionSettled}
         />
@@ -453,6 +461,12 @@ export default function ExploreScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['left', 'right']}>
       {pinnedHeader}
+      {/* `body` is a plain function, not a component, so calling it here
+          inlines its ref read into this render — which is what react-hooks/refs
+          reports, at this line rather than at the read. The read is the map's
+          uncontrolled `initialRegion`; see the comment on it for why a ref is
+          correct there. */}
+      {/* eslint-disable-next-line react-hooks/refs */}
       {body()}
     </SafeAreaView>
   );
