@@ -28,6 +28,11 @@ export type LocatedEvent = ApiEvent & { latitude: number; longitude: number };
 // to app/lib/mapClusters.ts. Unchanged below the threshold — same ring, same
 // numbers — and testable there without mounting a map. That file's header
 // explains why a building with forty events now gets one marker.
+//
+// LOOP-279's coordinate validation moved with it. That fix landed on main
+// against the version of this function that lived here; the guard itself is
+// what matters, not where it sits, so it is now the first thing
+// buildMapMarkers does. See the note on `toPoint` in mapClusters.ts.
 
 /**
  * Android's double-tap timeout (ViewConfiguration.getDoubleTapTimeout). Zoom
@@ -71,8 +76,15 @@ interface MapViewWrapperProps {
    */
   onClusterPress?: (cluster: ClusterMarker<LocatedEvent>) => void;
   onMapPress: () => void;
-  /** Where to open the map. Campus on a cold start; last position on a remount. */
-  initialRegion?: MapRegion;
+  /**
+   * Where to open the map. Campus on a cold start; last position on a remount.
+   *
+   * A getter, not a value: the caller keeps the last camera in a ref (so a pan
+   * does not re-render the screen) and reading a ref during render is
+   * `react-hooks/refs`. Called once, from a useState initializer — see
+   * `mountRegion` below.
+   */
+  getInitialRegion?: () => MapRegion | undefined;
   /** Fires when the camera settles, so the caller can remember where we are. */
   onRegionSettled?: (region: MapRegion) => void;
 }
@@ -84,7 +96,7 @@ export default function MapViewWrapper({
   onPinPress,
   onClusterPress,
   onMapPress,
-  initialRegion,
+  getInitialRegion,
   onRegionSettled,
 }: MapViewWrapperProps) {
   // Hook must be called before any conditional return to satisfy the
@@ -93,6 +105,10 @@ export default function MapViewWrapper({
   const suppressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [zoomSuppressed, setZoomSuppressed] = useState(false);
   const colors = useThemeColors();
+
+  // Lazy initializer, so the caller's ref is read exactly once — at mount,
+  // which is the only moment an uncontrolled MapView looks at initialRegion.
+  const [mountRegion] = useState<MapRegion>(() => getInitialRegion?.() ?? UT_REGION);
 
   useEffect(
     () => () => {
@@ -160,7 +176,7 @@ export default function MapViewWrapper({
         // the map unmounts and reopens at campus zoom having discarded wherever
         // you had panned to. Indistinguishable from "the map zoomed on me".
         // The caller remembers the last settled camera and hands it back.
-        initialRegion={initialRegion ?? UT_REGION}
+        initialRegion={mountRegion}
         onRegionChangeComplete={onRegionSettled}
         zoomEnabled={!zoomSuppressed}
         moveOnMarkerPress={false}

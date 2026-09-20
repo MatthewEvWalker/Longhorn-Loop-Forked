@@ -161,8 +161,36 @@ export function buildMapMarkers<T extends MappableEvent>({
     return group;
   };
 
-  for (const event of visible) bucket(coordinateKey(event)).visible.push(event);
-  for (const event of dimmed) bucket(coordinateKey(event)).dimmed.push(event);
+  /**
+   * COERCE AND VALIDATE BEFORE GROUPING (LOOP-279).
+   *
+   * The type says `number` and the caller filters on `!= null`, but the value
+   * came off the wire. A string "30.28" passes that filter and then throws on
+   * `.toFixed()` in coordinateKey. A non-finite value is worse than a throw: it
+   * reaches MapKit as a NaN coordinate and takes the app down NATIVELY, where
+   * there is no JS frame left to catch it.
+   *
+   * An event that fails this gets no marker rather than killing the whole map.
+   *
+   * This guard arrived on main as part of the function this module replaced.
+   * Keeping it is the point of the merge — the extraction moved the code, it
+   * did not make the wire data trustworthy.
+   */
+  const place = (event: T, into: 'visible' | 'dimmed') => {
+    const latitude = Number(event.latitude);
+    const longitude = Number(event.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+    // Keyed and positioned off the COERCED numbers, so a numeric string groups
+    // with the equivalent number instead of forming a venue of its own.
+    bucket(coordinateKey({ ...event, latitude, longitude }))[into].push({
+      ...event,
+      latitude,
+      longitude,
+    });
+  };
+
+  for (const event of visible) place(event, 'visible');
+  for (const event of dimmed) place(event, 'dimmed');
 
   const scattered: ScatteredMarker<T>[] = [];
   const clusters: ClusterMarker<T>[] = [];

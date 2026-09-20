@@ -1,3 +1,4 @@
+import ResultsErrorBoundary from '@/app/components/ErrorBoundary';
 import EventCard, { ApiEvent } from '@/app/components/EventCard';
 import EventMiniCard from '@/app/components/EventMiniCard';
 import MapViewWrapper, { LocatedEvent, MapRegion } from '@/app/components/MapViewWrapper';
@@ -31,10 +32,20 @@ import {
 import { ORG_SEARCH_MIN_QUERY } from '@/shared/orgRegistration';
 import { TAXONOMY_BUCKETS } from '@/shared/taxonomy';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
+import { useRouter, type ErrorBoundaryProps } from 'expo-router';
 import { CompassIcon, ListIcon, MapPin } from 'phosphor-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Keyboard,
+  Platform,
+  Pressable,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 type EventsListResponse = { events: ApiEvent[] };
@@ -83,7 +94,66 @@ function matchesEvent(event: ApiEvent, needle: string): boolean {
     ...(event.categories ?? []).map((c) => c?.name),
   ];
 
-  return haystack.some((field) => field != null && field.toLowerCase().includes(needle));
+  // typeof, not `!= null` (LOOP-279). The types say every entry is a string,
+  // but these come straight off the wire: `tags` and `categories` are joined
+  // server-side from event_tags / event_categories, so a row with an unexpected
+  // shape puts a non-string in here and `.toLowerCase()` throws mid-keystroke —
+  // an unhandled throw in render, which in a release build is a hard crash and
+  // not a red box. Worth noting `.some()` short-circuits: a needle that matches
+  // the title never reaches the tags, so a bad tag only bites on queries that
+  // miss everything above it. That is exactly the shape of a crash report that
+  // names one specific search term.
+  return haystack.some(
+    (field) => typeof field === 'string' && field.toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * Route-level backstop (LOOP-279). Expo Router renders this instead of the
+ * screen when anything under `/explore` throws during render.
+ *
+ * The in-screen <ResultsErrorBoundary> below is the one that should normally
+ * fire: it swaps only the results and leaves the search field alive, so the
+ * user can type their way out. This exists because a boundary cannot catch a
+ * throw in its own parent's render, and ExploreScreen does real work before it
+ * mounts anything (the search filter, the located-events narrowing). Without
+ * this, that class of throw escapes to the native handler, which in a release
+ * build is a hard crash with no trace — `app/lib/monitoring.ts` is still a
+ * documented no-op, so there would be nothing to symbolicate afterwards.
+ *
+ * `retry` remounts the route, which resets the query to empty.
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  const colors = useThemeColors();
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <View
+        style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 }}
+      >
+        <Text style={{ fontSize: 17, fontWeight: '600', color: colors.ink, textAlign: 'center' }}>
+          Explore ran into a problem
+        </Text>
+        <Text
+          style={{ fontSize: 14, color: colors.inkMuted, textAlign: 'center', marginTop: 8 }}
+          // Shown, not hidden: TestFlight feedback is the only crash channel
+          // this app has while monitoring is stubbed, and a tester who can read
+          // the message can paste it into a report.
+          selectable
+        >
+          {error?.message ?? 'Unknown error'}
+        </Text>
+        <TouchableOpacity
+          onPress={() => void retry()}
+          accessibilityRole="button"
+          accessibilityLabel="Reload Explore"
+          hitSlop={8}
+          style={{ marginTop: 20 }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: '600', color: colors.accent }}>Reload</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
 }
 
 /** The "Explore" title, and the list/map toggle measured against it. */
@@ -99,6 +169,9 @@ const TOGGLE_ICON_SIZE = 22;
 
 /** Takes each 32x42 button to 44x50 — past the 44pt floor, same control height. */
 const TOGGLE_HIT_SLOP = { top: 6, bottom: 6, left: 4, right: 4 };
+
+/** The 44pt tap-target floor, met with height rather than hitSlop. */
+const SEARCH_BAR_HEIGHT = 44;
 
 export default function ExploreScreen() {
   const colors = useThemeColors();
@@ -132,8 +205,6 @@ export default function ExploreScreen() {
     setNow(new Date());
     setFiltersOpen(true);
   }, []);
-
-  const listRef = useRef<FlatList<ApiEvent>>(null);
 
   const debouncedQuery = useDebounced(query.trim(), SEARCH_DEBOUNCE_MS);
   const needle = debouncedQuery.toLowerCase();
@@ -259,26 +330,42 @@ export default function ExploreScreen() {
   );
 
   /**
-   * Snap back to the top whenever the result set changes.
+   * Identity of the grid. Changing it remounts the list.
    *
-   * Not cosmetic — this is the crash fix. VirtualizedList keeps a render window
-   * of cell frames keyed by index. Editing the query rewrites `data` underneath
-   * that window, and if the list is still scrolled to an offset that only
-   * existed for the LONGER previous list, it asks for a frame at an index the
-   * new data no longer has and throws ("Tried to get frame for out of range
-   * index"). Typing, deleting and retyping quickly is the reliable way to hit
-   * it, because each edit shrinks and regrows `data` before the list settles.
+   * This is the crash fix (LOOP-279), and it replaces an earlier scroll-to-top
+   * effect that only mostly worked. The bug: VirtualizedList keeps a render
+   * window of cell frames keyed by index. Editing the query rewrites `data`
+   * underneath that window, and if the list is still scrolled to an offset that
+   * only existed for the LONGER previous list, it asks for a frame at an index
+   * the new data no longer has and throws ("Tried to get frame for out of range
+   * index"). An unhandled throw in render is a red box in dev and a hard crash
+   * in a release build, which is what a tester reports as "broke when I typed".
    *
-   * scrollToOffset (not scrollToIndex) is deliberate: it is safe on an empty
-   * list, where scrollToIndex would throw on its own.
+   * Why the old fix was not enough: `listRef.current.scrollToOffset(...)` from
+   * a useEffect runs AFTER commit, and the native scroll it asks for lands
+   * later still. The list has already reconciled the shrunken `data` against
+   * the old offset by then, so the throw beats the correction. Racing it with
+   * useLayoutEffect just narrows the window instead of closing it.
+   *
+   * THE FILTERS BELONG IN THIS KEY for exactly the same reason the query does.
+   * Applying one shrinks `data` under the same render window — narrowing 100
+   * events to 3 while scrolled to row 40 is the identical out-of-range read.
+   * Spelled out field by field rather than via a count, because swapping one
+   * college for another leaves the count unchanged while replacing every row.
+   *
+   * Remounting closes it: a new list starts at offset 0 with no cached frames,
+   * so there is no stale window left to read. The cost is rebuilding ~100 cells
+   * at each debounce boundary — cheap, and the content is changing wholesale at
+   * that moment anyway. Note this keys off `needle` (the DEBOUNCED query), not
+   * `query`, so it is once per typing pause, not once per keystroke.
    */
-  useEffect(() => {
-    listRef.current?.scrollToOffset({ offset: 0, animated: false });
-    // `filters` belongs here for exactly the reason the comment above gives:
-    // applying one shrinks `data` under a render window that may be scrolled
-    // past the new end. Filtering 100 events down to 3 while scrolled to row 40
-    // is the same out-of-range frame crash as typing a query.
-  }, [needle, isSearching, activeSelectionKey, filters]);
+  const filterKey = [
+    filters.collegeId ?? '',
+    filters.interests.join('+'),
+    filters.when,
+    filters.perks.join('+'),
+  ].join('|');
+  const gridKey = `explore-grid-${activeSelectionKey}-${isSearching ? needle : ''}-${filterKey}`;
 
   // Type-narrowed subset: only events with non-null coordinates go on the map.
   // Driven by visibleEvents so the pins honour the search and the filters too.
@@ -359,6 +446,42 @@ export default function ExploreScreen() {
   const handleRegionSettled = useCallback((region: MapRegion) => {
     lastRegion.current = region;
   }, []);
+
+  /**
+   * Handed to the map as a GETTER rather than as `initialRegion={lastRegion.current}`.
+   *
+   * Two reasons, and they point the same way. The lint one: reading `.current`
+   * in the render body is `react-hooks/refs` ("Cannot access refs during
+   * render") and fails CI. The real one: an uncontrolled MapView reads its
+   * initial region exactly once, at mount, so passing it as a rendered value
+   * was always misleading — the map re-reads nothing on later renders. A getter
+   * the map calls from a useState initializer makes the mount-only read
+   * explicit instead of suppressing the warning about it.
+   */
+  const getLastRegion = useCallback(() => lastRegion.current ?? undefined, []);
+
+  /**
+   * Drop focus on the search field.
+   *
+   * Both calls are needed. `Keyboard.dismiss()` is what actually retracts the
+   * keyboard on iOS and Android, but it is a no-op on web, where the caret and
+   * the focus ring would otherwise stay put; `blur()` handles that and also
+   * guarantees onBlur fires, which is what clears the field's orange border.
+   */
+  const searchRef = useRef<TextInput>(null);
+  const dismissSearch = useCallback(() => {
+    searchRef.current?.blur();
+    Keyboard.dismiss();
+  }, []);
+
+  /** Stable identity: an inline arrow re-renders every Marker (see MapViewWrapper). */
+  const handleMapPress = useCallback(() => {
+    setSelectedEventId(null);
+    // Bare map also closes the venue panel — one tap should not leave one of
+    // the two marker answers open behind a dismissed other.
+    setClusterEvents(null);
+    dismissSearch();
+  }, [dismissSearch]);
 
   const handleSelect = useCallback((next: ExploreSelection) => {
     setSelection(next);
@@ -492,17 +615,34 @@ export default function ExploreScreen() {
       </View>
 
       {/* Search (LOOP-175) */}
+      {/*
+        SEARCH_BAR_HEIGHT overrides the 33px form-field default. That default is
+        the smallest tap target on this screen and the one the user is aimed at
+        first — the same hit-target complaint LOOP-283 raises about the section
+        arrows. 44 is the platform floor, and unlike the arrows it can be met
+        with real height rather than hitSlop, because a search bar is supposed
+        to look like a big soft target. The glyph and text scale with it or the
+        control reads as an empty box with something small floating in it.
+
+        Height only here, not in the shared component: TextInputField backs
+        every form in the app and raising all of them is a design decision.
+      */}
       <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
         <TextInputField
+          ref={searchRef}
           value={query}
           onChangeText={setQuery}
           placeholder="Search events and orgs..."
           autoCorrect={false}
           autoCapitalize="none"
           returnKeyType="search"
+          // Dismisses on the keyboard's own Search key, so the field is not the
+          // one place on the screen with no way out.
+          onSubmitEditing={dismissSearch}
           clearable
           borderRadius={999}
-          leftIcon={<LhlSearchIcon size={14} color={colors.inkSecondary} />}
+          height={SEARCH_BAR_HEIGHT}
+          leftIcon={<LhlSearchIcon size={18} color={colors.inkSecondary} />}
         />
       </View>
 
@@ -654,8 +794,7 @@ export default function ExploreScreen() {
     if (showList) {
       return (
         <FlatList
-          ref={listRef}
-          key={`explore-grid-${selectionKey(selection)}`}
+          key={gridKey}
           data={showEventSection ? visibleEvents : []}
           extraData={savedIds}
           keyExtractor={keyExtractor}
@@ -663,7 +802,12 @@ export default function ExploreScreen() {
           columnWrapperStyle={{ gap: 12 }}
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 32, gap: 12 }}
           showsVerticalScrollIndicator={false}
+          // persistTaps "handled": a tap on dead space in the list dismisses
+          // the keyboard, but a tap on a card still opens the card instead of
+          // being eaten as a dismiss. dismissMode "on-drag": starting a scroll
+          // counts as leaving the field, which is what a scroll means.
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           // Android detaches clipped subviews by default. Combined with a data
           // array that changes on every keystroke, that is the other reliable
           // way to end up reading a detached cell. Cheap to disable here: the
@@ -713,20 +857,8 @@ export default function ExploreScreen() {
           selectedEventId={selectedEventId}
           onPinPress={handlePinPress}
           onClusterPress={handleClusterPress}
-          // Tapping bare map dismisses whichever of the two is open.
-          onMapPress={() => {
-            setSelectedEventId(null);
-            setClusterEvents(null);
-          }}
-          // Reading a ref in render, deliberately. `initialRegion` is an
-          // uncontrolled prop the map consults once on mount, and the whole
-          // reason the last region lives in a ref is that panning the map must
-          // NOT re-render this screen. Promoting it to state would re-render on
-          // every frame of a drag; that is the bug this shape avoids, so the
-          // rule's advice does not apply here. The rule fires at the `body()`
-          // call site below rather than on this line, so the disable lives
-          // there — this is the reason for it.
-          initialRegion={lastRegion.current ?? undefined}
+          onMapPress={handleMapPress}
+          getInitialRegion={getLastRegion}
           onRegionSettled={handleRegionSettled}
         />
 
@@ -760,19 +892,56 @@ export default function ExploreScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }} edges={['left', 'right']}>
-      {pinnedHeader}
-      {/* `body` is a plain function, not a component, so calling it here
-          inlines its ref read into this render — which is what react-hooks/refs
-          reports, at this line rather than at the read. The read is the map's
-          uncontrolled `initialRegion`; see the comment on it for why a ref is
-          correct there. */}
-      {/* eslint-disable-next-line react-hooks/refs */}
-      {body()}
+      {/*
+        Tap anywhere off the search field to leave it.
 
-      {/* Filters apply live — the list and the pins behind the sheet change as
-          you tap, which is what the half-height detent is FOR. The footer
-          button carries the count and dismisses; it is not a commit step, and
-          there is no draft state to desync from what you can already see. */}
+        Four handlers cover the screen between them, and each has to live where
+        it does. This Pressable takes the header — the title row, the padding
+        around the search bar, the gaps — which is everything up here that owns
+        no touch handler of its own. Below it, the list dismisses via
+        keyboardShouldPersistTaps / keyboardDismissMode and the map via
+        onMapPress, because a ScrollView claims the responder for touches inside
+        it and a native map swallows its own; neither would ever bubble a tap up
+        to a wrapper.
+
+        Which is also why this wraps ONLY the header and not the whole screen.
+        A Pressable around body() would sit over the MapView, and Pressable
+        answers onStartShouldSetResponder with true — on the default view of
+        this screen that risks eating the first touch of a pan. Nothing is lost
+        by staying up here: the region below the header is always either the
+        list or the map, and both already handle it.
+
+        accessible={false} keeps this out of the screen reader's element list.
+        It is a fallback gesture, not a control.
+      */}
+      <Pressable onPress={dismissSearch} accessible={false} android_disableSound>
+        {/*
+          The header stays OUTSIDE the boundary on purpose (LOOP-279). If
+          results throw, the search field has to survive — the fallback's "try
+          again" is useless if the only way out of a bad query is to kill the
+          app. Resetting on `needle` means editing the query clears the fallback
+          on its own.
+        */}
+        {pinnedHeader}
+      </Pressable>
+      <ResultsErrorBoundary
+        label="explore.results"
+        resetKeys={[needle, activeSelectionKey, showList, filterKey]}
+        message="Could not show these results. Try a different search."
+      >
+        {body()}
+      </ResultsErrorBoundary>
+
+      {/* OUTSIDE the boundary, for the same reason the header is: the sheet is
+          how you change what the results are. If a bad filter combination is
+          what threw, the control that lets you undo it has to survive the
+          fallback — and the fallback's reset keys include the filters, so
+          changing one clears it.
+
+          Filters apply live: the list and pins behind the sheet change as you
+          tap. The footer button carries the count and dismisses; it is not a
+          commit step, so there is no draft state to desync from what you can
+          already see. */}
       <ExploreFilterSheet
         visible={filtersOpen}
         filters={filters}
