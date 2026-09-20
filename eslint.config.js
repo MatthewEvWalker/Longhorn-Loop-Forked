@@ -35,11 +35,20 @@ const expoConfig = require('eslint-config-expo/flat');
 //     New code should not add to the pile: the warning is the reminder.
 // ---------------------------------------------------------------------------
 
-/** Files whose animation logic is Reanimated shared values. */
+/**
+ * Files whose animation logic is Reanimated shared values.
+ *
+ * KEEP THIS IN STEP WITH THE CODE. It was wrong once already: the shared-value
+ * plumbing was extracted OUT of ManageEventSheet into DragDismissSheet, and
+ * this list kept pointing at the file that no longer imports Reanimated while
+ * the two files that now write `.value` had no exemption at all. The symptom is
+ * a lint failure in CI, not a broken app, so it is easy to miss locally.
+ */
 const REANIMATED_FILES = [
   'app/(tabs)/create.tsx',
   'app/components/SettingsDrawer.tsx',
-  'app/components/modals/ManageEventSheet.tsx',
+  'app/components/modals/DragDismissSheet.tsx',
+  'app/components/explore/ExploreListPanel.tsx',
   'app/notifications.tsx',
 ];
 
