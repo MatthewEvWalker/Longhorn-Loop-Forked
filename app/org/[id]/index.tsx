@@ -885,9 +885,9 @@ export default function OrgConsoleScreen() {
       <InviteEditorModal
         visible={showInvite}
         onClose={() => setShowInvite(false)}
-        onInvite={async (email) => {
+        onInvite={async (email, role) => {
           try {
-            await api.post(`/orgs/${orgId}/invites`, { token, body: { email } });
+            await api.post(`/orgs/${orgId}/invites`, { token, body: { email, role } });
             queryClient.invalidateQueries({ queryKey: orgKeys.members(orgId) });
           } catch (err) {
             throw new Error(describeError(err, 'That invite could not be sent.'));
